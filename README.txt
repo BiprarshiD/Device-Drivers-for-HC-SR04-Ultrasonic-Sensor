@@ -51,7 +51,7 @@ Enter Echo pin for HCSR04_1:5
 Measured Time Stamp = 72803991174 
 Measured Distance = 290 cm 
 Measured Time Stamp = 75202438738 
-Measured Distance = 2245 cm 
+Measured Distance = 295 cm 
 Measured Time Stamp = 151589573354 
 Measured Distance = 309 cm 
 Measured Time Stamp = 151513751206 
