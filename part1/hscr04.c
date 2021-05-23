@@ -390,7 +390,7 @@ static irq_handler_t hcsr04_irq_handler(unsigned int irq, void *dev_id)
 		distance = div_u64(dist, 8000000);  //as board frequency is 400 MHz and we need to divide by 2 to measure the distance as echo travels back and forth
 		//Ktime:
 		//distance = div_u64(dist, 34);
-		
+		spin_unlock_irqrestore(&hcsr04_devp->l,f);
 	}
 	
 	return (irq_handler_t) IRQ_HANDLED;
@@ -431,7 +431,6 @@ void distance_calc(struct hcsr04_dev *hcsr04_devp)
 	do_div(sum, hcsr04_devp->hcsr04_configs.sample);  //Find the average distance
 	hcsr04_buf_write(RDTSC(), sum, hcsr04_devp); //write the Time Stamp and the distance to the Fifo buffer 
 	hcsr04_devp->m=0;
-	spin_unlock_irqrestore(&hcsr04_devp->l,f);
 	//printk("HCSR04: RDTSC:%llu\n",RDTSC());
 	//printk("HCSR04: Distance Found\n");
 }
