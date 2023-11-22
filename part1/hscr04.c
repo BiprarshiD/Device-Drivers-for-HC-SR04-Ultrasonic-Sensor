@@ -77,21 +77,32 @@ struct hcsr04_config
 //Structure for fifo buffer
 struct hcsr04_fifo_buf {
 
-	unsigned long long int TSC;
-	unsigned long long int size;
+	unsigned long long int TSC;        //time stamp counter
+	unsigned long long int size;       //distance recorded 
 }hcsr04_fifo_bufs;	
 
 //Structure for the device defined
 struct hcsr04_dev{
-
-	struct miscdevice miscdevice;
+   /*
+  struct miscdevice{
+	int 	minor
+  	const char * 	name
+ 	struct file_operations * 	fops
+ 	struct list_head 	list
+ 	struct device * 	parent
+ 	struct device * 	this_device
+ 	const char * 	nodename
+ 	umode_t 	mode
+   }
+   */
+	struct miscdevice miscdevice;                           
 	struct hcsr04_dev *next;
 	struct hcsr04_config hcsr04_configs;
 	int c;
 	int head;
 	int counter;
 	struct hcsr04_fifo_buf hcsr04_fifo_bufs[5];
-	int m;
+	int m;              //indicates distance calculation is ongoing
 	spinlock_t l;
 	
 } *hcsr04_devp;
@@ -104,7 +115,7 @@ struct hcsr04_drv{
 }*hcsr04_drvp;
 
 
-//Time stamp counter defined
+//Time stamp counter defined , this function returns the current timestamp
 static __inline__ unsigned long long RDTSC(void)
 {
   unsigned hi, lo;
@@ -113,7 +124,7 @@ static __inline__ unsigned long long RDTSC(void)
 }
 
 
-//Configuration setting for the pins
+//Configuration setting for the pins,  this configures and sets up the gpio modes of echo and trigger pins as per application
 void config_set( int gpioA, int gpioB, int direction, int f, int pinmuxA, int first, int pinmuxB, int last)
 {
 	if(!f)
@@ -161,7 +172,7 @@ void config_set( int gpioA, int gpioB, int direction, int f, int pinmuxA, int fi
 	}
 } 
 
-//pin multiplexing
+//configures the gpio pins as per application ; pin multiplexing ; this configures and sets up the gpio modes of echo and trigger pins as per application
 int config_pin(int io, int gpio_pin, int f)
 {
 	int pin;
@@ -283,7 +294,7 @@ int hcsr04_open(struct inode *inode, struct file *file)
 
 }
 
-//close the device driver
+//close the device driver , release is called when the device count becomes 0
 int hcsr04_release(struct inode *inode, struct file *file)
 {
 	struct hcsr04_dev *hcsr04_devp = file->private_data;
@@ -294,22 +305,20 @@ int hcsr04_release(struct inode *inode, struct file *file)
 	free_irq(gpio_to_irq(hcsr04_devp->hcsr04_configs.echo), (void *)hcsr04_devp);
 
 	printk("HCSR04: Device is closing\n");
-	
-		
 
 	return 0;
 }
 
-//Function to write in the buffer
+//Function to write in the buffer;  write the Time Stamp and the distance to the Fifo buffer
 void hcsr04_buf_write(unsigned long long int tsc, unsigned long long int size, struct hcsr04_dev *hcsr04_devp)
 {
 	//Access the current device structure
 	//struct hcsr04_dev *hcsr04_devp = hcsr04_drvp->curr;
 	
 	int a;
-	a = hcsr04_devp->c;  //access counter for the buffer
+	a = hcsr04_devp->c;  //access counter for the buffer , c is the counter of the fifo buffer
 	a=a+1;
-	//storing only latest 5 values
+	//storing only latest 5 values in the fifo buffer
 	if (a >= 5)
 	{
 		a=0;
@@ -322,11 +331,12 @@ void hcsr04_buf_write(unsigned long long int tsc, unsigned long long int size, s
 	}
 	//printk("TSC inside write buffer:%llu\n",tsc);
 	//Store the Time Stamp and distance in the buffer
-	hcsr04_devp->hcsr04_fifo_bufs[hcsr04_devp->c].size=size;
-	hcsr04_devp->hcsr04_fifo_bufs[hcsr04_devp->c].TSC=tsc;
-	hcsr04_devp->c=a;
+	hcsr04_devp->hcsr04_fifo_bufs[hcsr04_devp->c].size=size;   //store the distance measured by distancecalc()
+	hcsr04_devp->hcsr04_fifo_bufs[hcsr04_devp->c].TSC=tsc;     //store the timestamp
+	hcsr04_devp->c=a;											//update the counter i.e fifo buffer index
 }
 
+//Retrieve the distance and Time Stamp from the buffer of the current device
 int hcsr04_buf_read(struct hcsr04_fifo_buf *buf, struct hcsr04_dev *hcsr04_devp)
 {
 	//Access the current device structure
@@ -339,7 +349,7 @@ int hcsr04_buf_read(struct hcsr04_fifo_buf *buf, struct hcsr04_dev *hcsr04_devp)
 		return -1;
 	}
 	
-	a = hcsr04_devp->head + 1;
+	a = hcsr04_devp->head + 1;           //save the new head of fifo buffer for next read
 	if(a >= 5)
 	{
 		a=0;
@@ -348,7 +358,7 @@ int hcsr04_buf_read(struct hcsr04_fifo_buf *buf, struct hcsr04_dev *hcsr04_devp)
 	//Retrieve the distance and Time Stamp from the buffer
 	buf->size=hcsr04_devp->hcsr04_fifo_bufs[hcsr04_devp->head].size;
 	buf->TSC=hcsr04_devp->hcsr04_fifo_bufs[hcsr04_devp->head].TSC;
-	hcsr04_devp->head = a;
+	hcsr04_devp->head = a;   //update head of fifo buffer after reading the value into buf
 	return 0;
 }
 
@@ -396,14 +406,14 @@ static irq_handler_t hcsr04_irq_handler(unsigned int irq, void *dev_id)
 	return (irq_handler_t) IRQ_HANDLED;
 }
 
-//Calculate the distance
+//Calculate the distance; trigger the HCSR04 and store the distance measured into the fifo buffer
 void distance_calc(struct hcsr04_dev *hcsr04_devp)
 {
 	unsigned long long sum=0;
 	unsigned long long first=0;
 	unsigned long long last=80000000;
 	int i;
-	hcsr04_devp->m=1;
+	hcsr04_devp->m=1;      //m=1 denotes distance calculation starts
 	//printk("HCSR04: Outside FOR");
 	for (i=0; i<hcsr04_devp->hcsr04_configs.sample + 2; i++)
 	{
@@ -416,21 +426,21 @@ void distance_calc(struct hcsr04_dev *hcsr04_devp)
 		udelay(15);
 		gpio_set_value_cansleep(hcsr04_devp->hcsr04_configs.trigger, 0);
 		mdelay(1);
-		sum = sum + distance; 
+		sum = sum + distance;      // we get this distance from hcsr04_irq_handler
 		//Find the first and the last values
 		if(distance > first)
-			first = distance;
+			first = distance;       //we ignore the first and last distance measured for smoothing
 		if(distance < last)
-			last = distance;
+			last = distance;		//we ignore the first and last distance measured for smoothing
 
-		msleep(hcsr04_devp->hcsr04_configs.sample_period);
+		msleep(hcsr04_devp->hcsr04_configs.sample_period);        //delay between adjacent samples
 
 	}
 
 	sum = sum - first -last;  //exclude the first and the last values
 	do_div(sum, hcsr04_devp->hcsr04_configs.sample);  //Find the average distance
 	hcsr04_buf_write(RDTSC(), sum, hcsr04_devp); //write the Time Stamp and the distance to the Fifo buffer 
-	hcsr04_devp->m=0;
+	hcsr04_devp->m=0;           //m=0 denotes distance calculation ends
 	//printk("HCSR04: RDTSC:%llu\n",RDTSC());
 	//printk("HCSR04: Distance Found\n");
 }
@@ -450,7 +460,7 @@ ssize_t hcsr04_read(struct file *file, char *buffer, size_t count, loff_t *ppos)
 	return bytes_read;
 }
 
-//Write File operation
+//Write File operation - called from user space
 int hcsr04_write(struct file *file, const char *buffer, size_t count, loff_t *ppos)
 {
 	int * data;
@@ -467,10 +477,10 @@ int hcsr04_write(struct file *file, const char *buffer, size_t count, loff_t *pp
 	{
 		if(arg != 0)  //If the data from the user space is non-zero then clear the buffer
 		{
-			hcsr04_devp->head=0;
-			hcsr04_devp->c=0;
+			hcsr04_devp->head=0;         //restore head of fifo buffer to 0
+			hcsr04_devp->c=0;			//reset fifo index counter to 0
 		}
-		distance_calc(hcsr04_devp);
+		distance_calc(hcsr04_devp);          //trigger writing the fifo buffer based on fresh sensor readings
 		//printk("HCSR04:Distance calculated\n");
 	}
 		return 0;
@@ -482,17 +492,17 @@ static long hcsr04_ioctl(struct file *file, unsigned int ioctl_num, unsigned lon
 	struct data *data1;
 	struct hcsr04_dev *hcsr04_devp = file->private_data;
 	int ret, output;
-	data1 = (struct data* )val;
+	data1 = (struct data* )val; 		//store the argument to ioctl fn call in data1
 	switch(ioctl_num)
 	{
-		case SET_PARAMETERS:  //setting the parameters
+		case SET_PARAMETERS:  //setting the parameters i.e number of samples and sampling time
 		{
 			if(data1->val2<=0 || data1->val1<=1) //return einval if the number of samples is less than or equal to 1 and the sample period is less than or equal to 0
 			{
 				return -EINVAL;
 			}
-			hcsr04_devp->hcsr04_configs.sample = data1->val1;
-			hcsr04_devp->hcsr04_configs.sample_period = data1->val2;
+			hcsr04_devp->hcsr04_configs.sample = data1->val1;               //store no. of samples in device pointer
+			hcsr04_devp->hcsr04_configs.sample_period = data1->val2;		//store sampling time in device pointer
 		}
 		break;
 		
@@ -500,10 +510,10 @@ static long hcsr04_ioctl(struct file *file, unsigned int ioctl_num, unsigned lon
 		{
 			if((data1->val1 >= 0 && data1->val1 <=19) && ((data1->val2 >= 2 && data1->val2 <=6) || (data1->val2 >= 13 && data1->val2 <=19) || data1->val2 == 9 || data1->val2 == 11))
 			{
-				hcsr04_devp->hcsr04_configs.echo = config_pin(1, data1->val2, 0);
-				hcsr04_devp->hcsr04_configs.echopin = data1->val2;
-				hcsr04_devp->hcsr04_configs.trigger = config_pin(0, data1->val1, 0);
-				hcsr04_devp->hcsr04_configs.triggerpin = data1->val1;
+				hcsr04_devp->hcsr04_configs.echo = config_pin(1, data1->val2, 0);        //configure echo pin as input pin
+				hcsr04_devp->hcsr04_configs.echopin = data1->val2;                       //store gpio pin no. for echo pin
+				hcsr04_devp->hcsr04_configs.trigger = config_pin(0, data1->val1, 0);  	 //configure trigger pin as output pin
+				hcsr04_devp->hcsr04_configs.triggerpin = data1->val1; 					 //store gpio pin no. for trigger pin
 			}
 			else
 			{
@@ -552,7 +562,7 @@ int __init hcsr04_init(void)
 	int i;
 	int ret;
 	char hcsr04_name[15];
-        char x[4];
+    char x[4];
 	Devices = (int)Device;
 
 	//allocating 2d array memory to the columns of the device structure
@@ -582,8 +592,16 @@ int __init hcsr04_init(void)
 		hcsr04_devps[i]->miscdevice.name=hcsr04_name;
 		
 		hcsr04_devps[i]->miscdevice.fops = &hcsr04_fops;   //assign the respective file operations
+
+		/*
+		Register a miscellaneous device with the kernel. If the minor number is set to MISC_DYNAMIC_MINOR a minor number is assigned and placed in the minor field of the structure. For other cases the minor number requested is used.
+
+		The structure passed is linked into the kernel and may not be destroyed until it has been unregistered. By default, an open syscall to the device sets file->private_data to point to the structure. Drivers don't need open in fops for this.
+
+		A zero is returned on success and a negative errno code for failure.
+		*/
+	
 		ret = misc_register(&hcsr04_devps[i]->miscdevice);
-		
 		if(ret) {
 			printk("Can't register device\n");
 			return ret;
