@@ -1,7 +1,7 @@
 #include <linux/ioctl.h>
 
 
-
+//IOCTL Data structure
 typedef struct data
 {
 	int val1;
